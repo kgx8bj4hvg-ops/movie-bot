@@ -1,23 +1,26 @@
 import pandas as pd
 import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 
 print("Loading data...")
-
-import os
-
 print("Current files:", os.listdir())
 
 df = pd.read_csv("tmdb_5000_movies.csv", encoding="utf-8")
 df = df[['title', 'overview', 'vote_average', 'genres', 'keywords', 'production_countries']].dropna()
+
 
 def parse_json(text):
     try:
         return [x['name'].lower() for x in json.loads(text)]
     except:
         return []
+
 
 df['genres'] = df['genres'].apply(parse_json)
 df['production_countries'] = df['production_countries'].apply(parse_json)
@@ -27,10 +30,13 @@ print("Data ready")
 all_genres = sorted({g for sublist in df['genres'] for g in sublist})
 all_countries = sorted({c for sublist in df['production_countries'] for c in sublist})
 
+
 def make_keyboard(options, row_size=3):
     return [options[i:i+row_size] for i in range(0, len(options), row_size)]
 
+
 user_preferences = {}
+
 
 def recommend(genre=None, country=None, rating=None):
     filtered = df.copy()
@@ -46,6 +52,7 @@ def recommend(genre=None, country=None, rating=None):
         return None
 
     return filtered.sort_values(by='vote_average', ascending=False).head(5)
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [["🎬 Choose"], ["🎲 Random"], ["❌ Reset"]]
@@ -64,19 +71,16 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     prefs = user_preferences[user_id]
 
-  
     if "reset" in text:
         user_preferences[user_id] = {}
         await start(update, context)
         return
 
-    
     if "random" in text:
         row = df.sample(1).iloc[0]
         await update.message.reply_text(f"🎲 {row['title']} ⭐ {row['vote_average']}")
         return
 
-   
     if "choose" in text:
         prefs.clear()
         keyboard = make_keyboard(all_genres)
@@ -86,7 +90,6 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    
     if "genre" not in prefs:
         prefs["genre"] = text
 
@@ -99,7 +102,6 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-   
     if "country" not in prefs:
         prefs["country"] = None if text == "none" else text
 
@@ -111,7 +113,6 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-   
     if "rating" not in prefs:
         if text != "none":
             try:
@@ -140,13 +141,32 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await start(update, context)
 
 
-app = ApplicationBuilder().token("8792336460:AAFm2A79mVR5m-XtITlCFN1ssa2RZTlo_8Y").build()
+# ===== TELEGRAM APP =====
+app = ApplicationBuilder().token("token_here").build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-print("Bot is running...")
 
+# ===== FAKE WEB SERVER (Render) =====
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'Bot is running')
+
+
+def run_web():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(('0.0.0.0', port), Handler)
+    server.serve_forever()
+
+# ===== MAIN =====
 if __name__ == "__main__":
     print("Bot is running...")
+
+    
+    threading.Thread(target=run_web).start()
+
+ 
     app.run_polling()
